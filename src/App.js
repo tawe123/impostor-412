@@ -1,5 +1,5 @@
 // App.js
-import React, { useState, useEffect } from "react";
+import React, { useState } from "react";
 import { initializeApp } from "firebase/app";
 import {
   getFirestore,
@@ -10,17 +10,16 @@ import {
   updateDoc,
   onSnapshot,
   getDocs,
-  query,
 } from "firebase/firestore";
 
 // --- CONFIGURACIÓN DE FIREBASE ---
 const firebaseConfig = {
-  apiKey: "TU_API_KEY",
-  authDomain: "TU_AUTH_DOMAIN",
-  projectId: "TU_PROJECT_ID",
-  storageBucket: "TU_STORAGE_BUCKET",
-  messagingSenderId: "TU_MESSAGING_SENDER_ID",
-  appId: "TU_APP_ID",
+  apiKey: process.env.REACT_APP_API_KEY,
+  authDomain: process.env.REACT_APP_AUTH_DOMAIN,
+  projectId: process.env.REACT_APP_PROJECT_ID,
+  storageBucket: process.env.REACT_APP_STORAGE_BUCKET,
+  messagingSenderId: process.env.REACT_APP_MESSAGING_SENDER_ID,
+  appId: process.env.REACT_APP_APP_ID,
 };
 
 const app = initializeApp(firebaseConfig);
@@ -59,12 +58,14 @@ function App() {
     setMiId(jugadorId);
     const jugadorRef = doc(db, "rooms", id, "players", jugadorId);
     await setDoc(jugadorRef, { nombre, palabra: "", voto: null });
-    // escuchar cambios
+
+    // escuchar cambios en la sala
     onSnapshot(doc(db, "rooms", id), (snap) => {
       const data = snap.data();
       if (!data) return;
       setImpostorDescubierto(data.impostorDescubierto || false);
     });
+
     // escuchar jugadores
     const q = collection(db, "rooms", id, "players");
     onSnapshot(q, (snap) => {
@@ -85,9 +86,13 @@ function App() {
     const salaSnap = await getDoc(salaRef);
     if (!salaSnap.exists()) return;
     const data = salaSnap.data();
-    const isImpostor = data.impostor === Math.floor(Math.random() * palabras.length); // asigna aleatorio impostor
-    const palabra = isImpostor ? "IMPOSTOR" : palabras[Math.floor(Math.random() * palabras.length)];
     const jugadorRef = doc(db, "rooms", roomId, "players", miId);
+
+    // asignar palabra: impostor ve "IMPOSTOR"
+    const palabra = data.impostor === jugadores.findIndex(j => j.id === miId)
+      ? "IMPOSTOR"
+      : palabras[Math.floor(Math.random() * palabras.length)];
+
     await updateDoc(jugadorRef, { palabra });
     setMiPalabra(palabra);
   };
@@ -100,12 +105,10 @@ function App() {
 
   // --- NUEVA PARTIDA ---
   const nuevaPartida = async () => {
-    // resetea todo
     const salaRef = doc(db, "rooms", roomId);
     const salaSnap = await getDoc(salaRef);
     if (!salaSnap.exists()) return;
     await updateDoc(salaRef, { impostorDescubierto: false });
-    // reset jugadores
     const q = collection(db, "rooms", roomId, "players");
     const allPlayers = await getDocs(q);
     allPlayers.forEach(async (p) => {
@@ -117,16 +120,21 @@ function App() {
   return (
     <div style={{ padding: "20px", fontFamily: "sans-serif" }}>
       <h1>Juego del Impostor 412 ⚽</h1>
-      {!roomId && (
-        <button onClick={crearSala}>Crear Sala</button>
-      )}
-      {roomId && !miId && (
+
+      {!miId && (
         <div>
           <input type="text" placeholder="Tu nombre" id="nombreJugador" />
-          <button onClick={() => unirseSala(roomId, document.getElementById("nombreJugador").value)}>Unirse a Sala</button>
+          <input type="text" placeholder="ID de Sala" id="idSala" />
+          <button onClick={() => unirseSala(
+              document.getElementById("idSala").value,
+              document.getElementById("nombreJugador").value
+          )}>Unirse a Sala</button>
+          <br/><br/>
+          <button onClick={crearSala}>Crear Sala Aleatoria</button>
         </div>
       )}
-      {roomId && miId && (
+
+      {miId && (
         <div>
           <p>Sala: {roomId}</p>
           <button onClick={asignarPalabra}>Mostrar Mi Palabra</button>
@@ -139,9 +147,12 @@ function App() {
             </button>
           ))}
 
-          {impostorDescubierto ? (
-            <button onClick={nuevaPartida}>Nueva partida</button>
-          ) : null}
+          {impostorDescubierto && (
+            <div>
+              <h3>¡Impostor descubierto!</h3>
+              <button onClick={nuevaPartida}>Nueva partida</button>
+            </div>
+          )}
         </div>
       )}
     </div>
