@@ -1,13 +1,13 @@
 // App.js
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { initializeApp } from "firebase/app";
 import {
   getFirestore,
-  collection,
   doc,
   setDoc,
   getDoc,
   updateDoc,
+  collection,
   onSnapshot,
   getDocs,
 } from "firebase/firestore";
@@ -25,7 +25,7 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 
-// --- LISTA AMPLIADA DE JUGADORES DE FÚTBOL ---
+// --- LISTA DE PALABRAS (jugadores de fútbol) ---
 const palabras = [
   "Messi","Cristiano","Neymar","Mbappé","Lewandowski",
   "Salah","Modric","Kante","Ronaldo","Benzema",
@@ -35,47 +35,51 @@ const palabras = [
 ];
 
 function App() {
-  const [roomId, setRoomId] = useState("");
-  const [jugadores, setJugadores] = useState([]);
+  const [nombre, setNombre] = useState("");
+  const [roomId, setRoomId] = useState("sala123"); // room fijo para pruebas
   const [miId, setMiId] = useState("");
   const [miPalabra, setMiPalabra] = useState("");
+  const [jugadores, setJugadores] = useState([]);
   const [votos, setVotos] = useState({});
   const [impostorDescubierto, setImpostorDescubierto] = useState(false);
 
-  // --- CREAR SALA ---
-  const crearSala = async () => {
-    const id = Math.random().toString(36).substring(2, 7);
-    setRoomId(id);
-    const salaRef = doc(db, "rooms", id);
-    const impostorIndex = Math.floor(Math.random() * palabras.length);
-    await setDoc(salaRef, { jugadores: [], impostor: impostorIndex, impostorDescubierto: false });
+  // --- CREAR SALA SI NO EXISTE ---
+  const crearSalaSiNoExiste = async () => {
+    const salaRef = doc(db, "rooms", roomId);
+    const salaSnap = await getDoc(salaRef);
+    if (!salaSnap.exists()) {
+      const impostorIndex = Math.floor(Math.random() * palabras.length);
+      await setDoc(salaRef, { jugadores: [], impostor: impostorIndex, impostorDescubierto: false });
+    }
   };
 
   // --- UNIRSE A SALA ---
-  const unirseSala = async (id, nombre) => {
-    setRoomId(id);
+  const unirseSala = async () => {
+    if (!nombre) return alert("Ingrese su nombre");
+    await crearSalaSiNoExiste();
     const jugadorId = Math.random().toString(36).substring(2, 9);
     setMiId(jugadorId);
-    const jugadorRef = doc(db, "rooms", id, "players", jugadorId);
+    const jugadorRef = doc(db, "rooms", roomId, "players", jugadorId);
     await setDoc(jugadorRef, { nombre, palabra: "", voto: null });
 
-    // escuchar cambios en la sala
-    onSnapshot(doc(db, "rooms", id), (snap) => {
+    // Escuchar cambios de sala
+    const salaRef = doc(db, "rooms", roomId);
+    onSnapshot(salaRef, (snap) => {
       const data = snap.data();
       if (!data) return;
       setImpostorDescubierto(data.impostorDescubierto || false);
     });
 
-    // escuchar jugadores
-    const q = collection(db, "rooms", id, "players");
-    onSnapshot(q, (snap) => {
-      const list = [];
+    // Escuchar jugadores y votos
+    const jugadoresRef = collection(db, "rooms", roomId, "players");
+    onSnapshot(jugadoresRef, (snap) => {
+      const lista = [];
       const votosAct = {};
       snap.forEach((d) => {
-        list.push({ id: d.id, ...d.data() });
+        lista.push({ id: d.id, ...d.data() });
         if (d.data().voto) votosAct[d.data().voto] = (votosAct[d.data().voto] || 0) + 1;
       });
-      setJugadores(list);
+      setJugadores(lista);
       setVotos(votosAct);
     });
   };
@@ -86,13 +90,9 @@ function App() {
     const salaSnap = await getDoc(salaRef);
     if (!salaSnap.exists()) return;
     const data = salaSnap.data();
+    const jugadorIndex = jugadores.findIndex((j) => j.id === miId);
+    const palabra = data.impostor === jugadorIndex ? "IMPOSTOR" : palabras[Math.floor(Math.random() * palabras.length)];
     const jugadorRef = doc(db, "rooms", roomId, "players", miId);
-
-    // asignar palabra: impostor ve "IMPOSTOR"
-    const palabra = data.impostor === jugadores.findIndex(j => j.id === miId)
-      ? "IMPOSTOR"
-      : palabras[Math.floor(Math.random() * palabras.length)];
-
     await updateDoc(jugadorRef, { palabra });
     setMiPalabra(palabra);
   };
@@ -109,8 +109,8 @@ function App() {
     const salaSnap = await getDoc(salaRef);
     if (!salaSnap.exists()) return;
     await updateDoc(salaRef, { impostorDescubierto: false });
-    const q = collection(db, "rooms", roomId, "players");
-    const allPlayers = await getDocs(q);
+    const jugadoresRef = collection(db, "rooms", roomId, "players");
+    const allPlayers = await getDocs(jugadoresRef);
     allPlayers.forEach(async (p) => {
       await updateDoc(doc(db, "rooms", roomId, "players", p.id), { palabra: "", voto: null });
     });
@@ -123,14 +123,13 @@ function App() {
 
       {!miId && (
         <div>
-          <input type="text" placeholder="Tu nombre" id="nombreJugador" />
-          <input type="text" placeholder="ID de Sala" id="idSala" />
-          <button onClick={() => unirseSala(
-              document.getElementById("idSala").value,
-              document.getElementById("nombreJugador").value
-          )}>Unirse a Sala</button>
-          <br/><br/>
-          <button onClick={crearSala}>Crear Sala Aleatoria</button>
+          <input
+            type="text"
+            placeholder="Tu nombre"
+            value={nombre}
+            onChange={(e) => setNombre(e.target.value)}
+          />
+          <button onClick={unirseSala}>Unirse a Sala</button>
         </div>
       )}
 
@@ -146,6 +145,13 @@ function App() {
               {j.nombre} ({votos[j.id] || 0} votos)
             </button>
           ))}
+
+          <h3>Jugadores conectados:</h3>
+          <ul>
+            {jugadores.map((j) => (
+              <li key={j.id}>{j.nombre}</li>
+            ))}
+          </ul>
 
           {impostorDescubierto && (
             <div>
