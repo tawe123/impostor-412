@@ -25,52 +25,90 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 
-// --- LISTA DE PALABRAS (jugadores de fútbol) ---
-const palabras = [
-  "Messi","Cristiano","Neymar","Mbappé","Lewandowski",
-  "Salah","Modric","Kante","Ronaldo","Benzema",
-  "Hazard","Pogba","De Bruyne","Kane","Dybala",
-  "Suárez","Griezmann","Foden","Sterling","Jordi Alba",
-  "Alisson","Kimmich","Rodri","Sancho","Haaland"
+// --- LISTA DE JUGADORES DE FÚTBOL ---
+const jugadoresFutbol = [
+  "Messi", "Cristiano", "Neymar", "Mbappé", "Lewandowski",
+  "Kane", "Salah", "De Bruyne", "Modrić", "Hazard",
+  "Griezmann", "Ronaldo Nazário", "Ronaldinho", "Zidane", "Iniesta",
+  "Xavi", "Suárez", "Pogba", "Kroos", "Thiago Silva"
 ];
 
 function App() {
   const [nombre, setNombre] = useState("");
-  const [roomId, setRoomId] = useState("sala123"); // room fijo para pruebas
+  const [roomId, setRoomId] = useState("");
   const [miId, setMiId] = useState("");
   const [miPalabra, setMiPalabra] = useState("");
   const [jugadores, setJugadores] = useState([]);
   const [votos, setVotos] = useState({});
   const [impostorDescubierto, setImpostorDescubierto] = useState(false);
+  const [jugadoresEsperados, setJugadoresEsperados] = useState(4);
 
-  // --- CREAR SALA SI NO EXISTE ---
-  const crearSalaSiNoExiste = async () => {
-    const salaRef = doc(db, "rooms", roomId);
-    const salaSnap = await getDoc(salaRef);
-    if (!salaSnap.exists()) {
-      const impostorIndex = Math.floor(Math.random() * palabras.length);
-      await setDoc(salaRef, { jugadores: [], impostor: impostorIndex, impostorDescubierto: false });
-    }
+  // --- CREAR SALA ---
+  const crearSala = async () => {
+    const nuevoRoomId = Math.random().toString(36).substring(2, 8);
+    setRoomId(nuevoRoomId);
+
+    const jugadorNormal = jugadoresFutbol[Math.floor(Math.random() * jugadoresFutbol.length)];
+
+    await setDoc(doc(db, "rooms", nuevoRoomId), {
+      jugadoresEsperados,
+      jugadoresConectados: [],
+      jugadorNormal,
+      impostorIndex: null,
+      impostorAsignado: false,
+      impostorDescubierto: false
+    });
+
+    alert(`Sala creada! Room ID: ${nuevoRoomId}`);
   };
 
   // --- UNIRSE A SALA ---
   const unirseSala = async () => {
     if (!nombre) return alert("Ingrese su nombre");
-    await crearSalaSiNoExiste();
+    if (!roomId) return alert("Ingrese un Room ID");
+
     const jugadorId = Math.random().toString(36).substring(2, 9);
     setMiId(jugadorId);
-    const jugadorRef = doc(db, "rooms", roomId, "players", jugadorId);
-    await setDoc(jugadorRef, { nombre, palabra: "", voto: null });
 
-    // Escuchar cambios de sala
     const salaRef = doc(db, "rooms", roomId);
+    const salaSnap = await getDoc(salaRef);
+    if (!salaSnap.exists()) return alert("Sala no existe");
+
+    const salaData = salaSnap.data();
+    await updateDoc(salaRef, {
+      jugadoresConectados: [
+        ...salaData.jugadoresConectados,
+        { id: jugadorId, nombre, palabra: "", voto: null }
+      ]
+    });
+
+    // --- ESCUCHAR SALA ---
     onSnapshot(salaRef, (snap) => {
       const data = snap.data();
       if (!data) return;
       setImpostorDescubierto(data.impostorDescubierto || false);
+
+      // Asignar impostor si ya se llegó al número esperado
+      if (!data.impostorAsignado && data.jugadoresConectados.length === data.jugadoresEsperados) {
+        const impostorIndex = Math.floor(Math.random() * data.jugadoresEsperados);
+        updateDoc(salaRef, { impostorIndex, impostorAsignado: true });
+      }
+
+      // Asignar palabra a mi jugador
+      if (data.impostorAsignado && !miPalabra) {
+        const miJugador = data.jugadoresConectados.find(j => j.id === miId);
+        if (miJugador) {
+          const indexMiJugador = data.jugadoresConectados.findIndex(j => j.id === miId);
+          if (indexMiJugador === data.impostorIndex) {
+            setMiPalabra("IMPOSTOR");
+          } else {
+            setMiPalabra(data.jugadorNormal);
+          }
+        }
+      }
     });
 
-    // Escuchar jugadores y votos
+    // --- ESCUCHAR JUGADORES Y VOTOS ---
     const jugadoresRef = collection(db, "rooms", roomId, "players");
     onSnapshot(jugadoresRef, (snap) => {
       const lista = [];
@@ -84,19 +122,6 @@ function App() {
     });
   };
 
-  // --- ASIGNAR PALABRA ---
-  const asignarPalabra = async () => {
-    const salaRef = doc(db, "rooms", roomId);
-    const salaSnap = await getDoc(salaRef);
-    if (!salaSnap.exists()) return;
-    const data = salaSnap.data();
-    const jugadorIndex = jugadores.findIndex((j) => j.id === miId);
-    const palabra = data.impostor === jugadorIndex ? "IMPOSTOR" : palabras[Math.floor(Math.random() * palabras.length)];
-    const jugadorRef = doc(db, "rooms", roomId, "players", miId);
-    await updateDoc(jugadorRef, { palabra });
-    setMiPalabra(palabra);
-  };
-
   // --- VOTAR ---
   const votar = async (jugadorId) => {
     const jugadorRef = doc(db, "rooms", roomId, "players", miId);
@@ -108,12 +133,13 @@ function App() {
     const salaRef = doc(db, "rooms", roomId);
     const salaSnap = await getDoc(salaRef);
     if (!salaSnap.exists()) return;
-    await updateDoc(salaRef, { impostorDescubierto: false });
     const jugadoresRef = collection(db, "rooms", roomId, "players");
     const allPlayers = await getDocs(jugadoresRef);
     allPlayers.forEach(async (p) => {
       await updateDoc(doc(db, "rooms", roomId, "players", p.id), { palabra: "", voto: null });
     });
+
+    await updateDoc(salaRef, { impostorIndex: null, impostorAsignado: false, impostorDescubierto: false });
     setMiPalabra("");
   };
 
@@ -129,6 +155,22 @@ function App() {
             value={nombre}
             onChange={(e) => setNombre(e.target.value)}
           />
+          <br />
+          <input
+            type="number"
+            placeholder="Cantidad de jugadores"
+            value={jugadoresEsperados}
+            onChange={(e) => setJugadoresEsperados(Number(e.target.value))}
+          />
+          <br />
+          <button onClick={crearSala}>Crear Sala</button>
+          <br />
+          <input
+            type="text"
+            placeholder="Room ID"
+            value={roomId}
+            onChange={(e) => setRoomId(e.target.value)}
+          />
           <button onClick={unirseSala}>Unirse a Sala</button>
         </div>
       )}
@@ -136,7 +178,6 @@ function App() {
       {miId && (
         <div>
           <p>Sala: {roomId}</p>
-          <button onClick={asignarPalabra}>Mostrar Mi Palabra</button>
           <h2>Mi palabra: {miPalabra}</h2>
 
           <h3>Votar:</h3>
