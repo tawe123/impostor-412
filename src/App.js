@@ -11,7 +11,7 @@ import {
   updateDoc,
 } from "firebase/firestore";
 
-// ⚡ Configuración Firebase
+// Configuración Firebase
 const firebaseConfig = {
   apiKey: process.env.REACT_APP_API_KEY,
   authDomain: process.env.REACT_APP_AUTH_DOMAIN,
@@ -24,7 +24,7 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 
-// 🎲 Lista de 200 jugadores famosos (incluye 20 peruanos)
+// Lista de 200 jugadores (incluye 20 peruanos)
 const jugadoresFamosos = [
   "Pelé","Maradona","Zidane","Ronaldinho","Ronaldo Nazário","Cruyff","Beckenbauer","Baggio","Platini","George Best",
   "Eusebio","Roberto Carlos","Figo","Kaka","Totti","Maldini","Gerrard","Lampard","Drogba","Robben",
@@ -51,10 +51,9 @@ function App() {
   const [miPalabra, setMiPalabra] = useState("");
   const [jugadores, setJugadores] = useState([]);
   const [ronda, setRonda] = useState(1);
-  const [todosVotaron, setTodosVotaron] = useState(false);
   const [jugadoresUsados, setJugadoresUsados] = useState([]);
 
-  // 🔹 Crear sala
+  // Crear sala
   const crearSala = async () => {
     if (!roomId || jugadoresEsperados < 3) {
       alert("Debes ingresar un Room ID y al menos 3 jugadores esperados");
@@ -70,7 +69,7 @@ function App() {
     alert("Sala creada. Comparte el Room ID: " + roomId);
   };
 
-  // 🔹 Unirse a sala
+  // Unirse a sala
   const unirseSala = async () => {
     if (!roomId || !jugadorNombre) {
       alert("Debes ingresar Room ID y tu nombre");
@@ -78,7 +77,6 @@ function App() {
     }
     const salaRef = doc(db, "rooms", roomId);
     const salaSnap = await getDoc(salaRef);
-
     if (!salaSnap.exists()) {
       alert("La sala no existe.");
       return;
@@ -93,7 +91,7 @@ function App() {
     });
   };
 
-  // 🔹 Escuchar jugadores en tiempo real
+  // Escuchar jugadores
   useEffect(() => {
     if (!roomId) return;
     const unsub = onSnapshot(
@@ -109,30 +107,13 @@ function App() {
     return () => unsub();
   }, [roomId, jugadorNombre]);
 
-  // 🔹 Detectar si todos votaron
-  useEffect(() => {
-    const activos = jugadores.filter(j => !j.eliminado);
-    if (activos.length === 0) return;
-
-    const completaronVoto = activos.every(j => j.voto && !j.eliminado);
-    setTodosVotaron(completaronVoto);
-  }, [jugadores]);
-
-  // 🔹 Asignar roles y palabra evitando repetir jugadores
+  // Asignar roles y palabra sin repetir
   const asignarRoles = async () => {
     const activos = jugadores.filter(j => !j.eliminado);
-    if (activos.length !== jugadoresEsperados) {
-      alert("Todavía no se conectaron todos los jugadores");
-      return;
-    }
+    if (activos.length !== jugadoresEsperados) return;
 
-    // Filtrar jugadores no usados
     const disponibles = jugadoresFamosos.filter(p => !jugadoresUsados.includes(p));
-    if (disponibles.length === 0) {
-      alert("Se agotaron los jugadores disponibles. Se reiniciará la lista.");
-      setJugadoresUsados([]);
-      return;
-    }
+    if (disponibles.length === 0) setJugadoresUsados([]);
 
     const palabraJuego = disponibles[Math.floor(Math.random() * disponibles.length)];
     const impostorIndex = Math.floor(Math.random() * activos.length);
@@ -146,27 +127,27 @@ function App() {
       })
     );
     await Promise.all(updates);
-
     setJugadoresUsados(prev => [...prev, palabraJuego]);
     setRonda(prev => prev + 1);
   };
 
-  // 🔹 Votar (modificable hasta iniciar ronda)
+  // Votar (puede cambiar hasta procesar ronda)
   const votar = async (id) => {
     const miInfo = jugadores.find(j => j.nombre === jugadorNombre);
     if (!miInfo || miInfo.eliminado) return;
 
     await updateDoc(doc(db, "rooms", roomId, "players", miInfo.id), { voto: id });
+    setJugadores(prev => prev.map(j => j.id === miInfo.id ? {...j, voto: id} : j));
   };
 
-  // 🔹 Expulsar jugador con más votos y reiniciar ronda
+  // Procesar ronda
   const procesarRonda = async () => {
-    if (!todosVotaron) {
-      alert("Todavía no todos votaron");
+    const activos = jugadores.filter(j => !j.eliminado);
+    if (activos.some(j => !j.voto)) {
+      alert("Todos deben votar antes de procesar la ronda.");
       return;
     }
 
-    const activos = jugadores.filter(j => !j.eliminado);
     const votosConteo = {};
     activos.forEach(j => {
       if (j.voto) votosConteo[j.voto] = (votosConteo[j.voto] || 0) + 1;
@@ -174,25 +155,34 @@ function App() {
 
     const maxVotos = Math.max(...Object.values(votosConteo));
     const expulsados = Object.keys(votosConteo).filter(id => votosConteo[id] === maxVotos);
-
-    // Expulsar primer jugador con más votos
     const expulsadoId = expulsados[0];
     await updateDoc(doc(db, "rooms", roomId, "players", expulsadoId), { eliminado: true });
 
     const expulsado = jugadores.find(j => j.id === expulsadoId);
+    const activosDespues = jugadores.filter(j => !j.eliminado && j.id !== expulsadoId);
+
     if (expulsado.rol === "impostor") {
       alert(`El impostor ${expulsado.nombre} fue expulsado. Ganaron los demás!`);
       asignarRoles();
-    } else {
-      const activosDespues = jugadores.filter(j => !j.eliminado && j.id !== expulsadoId);
-      if (activosDespues.length <= 2) {
-        const impostor = jugadores.find(j => j.rol === "impostor" && !j.eliminado);
+      return;
+    }
+
+    // Si quedan solo 2 y uno es impostor
+    if (activosDespues.length === 2) {
+      const impostor = activosDespues.find(j => j.rol === "impostor");
+      if (impostor) {
         alert(`El impostor ${impostor.nombre} ganó!`);
         asignarRoles();
-      } else {
-        alert(`${expulsado.nombre} fue expulsado. Inicia nueva ronda.`);
+        return;
       }
     }
+
+    alert(`${expulsado.nombre} fue expulsado. Inicia nueva ronda.`);
+    // Resetear votos para siguientes ronda
+    const resetVotos = activosDespues.map(j =>
+      updateDoc(doc(db, "rooms", roomId, "players", j.id), { voto: "" })
+    );
+    await Promise.all(resetVotos);
   };
 
   return (
@@ -230,9 +220,7 @@ function App() {
         <button onClick={asignarRoles}>Iniciar Juego</button>
       )}
 
-      {todosVotaron && (
-        <button onClick={procesarRonda}>Procesar Ronda</button>
-      )}
+      <button onClick={procesarRonda}>Procesar Ronda</button>
     </div>
   );
 }
