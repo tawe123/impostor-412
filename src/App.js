@@ -1,174 +1,283 @@
-import React, { useState, useEffect } from "react";
-import { initializeApp } from "firebase/app";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   getFirestore,
+  collection,
   doc,
   setDoc,
   getDoc,
-  onSnapshot,
-  collection,
-  addDoc,
   updateDoc,
+  onSnapshot,
+  getDocs,
+  serverTimestamp,
+  writeBatch,
 } from "firebase/firestore";
+import { db } from "./firebase"; // Asegúrate de exportar `db` desde ./firebase (initializeApp + getFirestore)
 
-// ⚡ Configuración Firebase
-const firebaseConfig = {
-  apiKey: process.env.REACT_APP_API_KEY,
-  authDomain: process.env.REACT_APP_AUTH_DOMAIN,
-  projectId: process.env.REACT_APP_PROJECT_ID,
-  storageBucket: process.env.REACT_APP_STORAGE_BUCKET,
-  messagingSenderId: process.env.REACT_APP_MESSAGING_SENDER_ID,
-  appId: process.env.REACT_APP_APP_ID,
-};
-
-const app = initializeApp(firebaseConfig);
-const db = getFirestore(app);
-
-// 🎲 Lista de jugadores conocidos
-const jugadoresFamosos = [
-  "Messi", "Cristiano Ronaldo", "Mbappé", "Neymar", "Suárez",
-  "Ronaldinho", "Maradona", "Pelé", "Zidane", "Modric", "Xavi",
-  "Iniesta", "Henry", "Lewandowski", "Hazard", "Benzema",
-  "Salah", "Ramos", "Buffon", "Ibrahimovic", "Kanté", "Vinicius",
+// ======= Lista de palabras (jugadores de fútbol) =======
+const JUGADORES = [
+  "Messi",
+  "Cristiano Ronaldo",
+  "Mbappé",
+  "Neymar",
+  "Haaland",
+  "Modric",
+  "Vinicius",
+  "Lewandowski",
+  "Bellingham",
+  "Griezmann",
+  "De Bruyne",
+  "Salah",
+  "Kane",
+  "Suárez",
+  "Dybala",
+  "Courtois",
+  "Ter Stegen",
+  "Alisson",
+  "Gavi",
+  "Pedri",
 ];
 
-function App() {
-  const [roomId, setRoomId] = useState("");
-  const [jugadorNombre, setJugadorNombre] = useState("");
-  const [jugadoresEsperados, setJugadoresEsperados] = useState(0);
-  const [miPalabra, setMiPalabra] = useState("");
-  const [jugadores, setJugadores] = useState([]);
-  const [voto, setVoto] = useState("");
+// ======= Utilidades =======
+const randChoice = (arr) => arr[Math.floor(Math.random() * arr.length)];
+const shortId = () => Math.random().toString(36).slice(2, 8).toUpperCase();
 
-  // 🔹 Crear sala
-  const crearSala = async () => {
-    if (!roomId || jugadoresEsperados < 3) {
-      alert("Debes ingresar un Room ID y al menos 3 jugadores esperados");
-      return;
+function useLocalId() {
+  const [id, setId] = useState(null);
+  useEffect(() => {
+    let pid = localStorage.getItem("playerId");
+    if (!pid) {
+      pid = crypto?.randomUUID?.() || shortId();
+      localStorage.setItem("playerId", pid);
     }
-    const salaRef = doc(db, "rooms", roomId);
-    await setDoc(salaRef, {
-      jugadoresEsperados,
-      creadaEn: new Date(),
-      juegoIniciado: false,
-    });
-    alert("Sala creada. Comparte el Room ID: " + roomId);
-  };
+    setId(pid);
+  }, []);
+  return id;
+}
 
-  // 🔹 Unirse a sala
-  const unirseSala = async () => {
-    if (!roomId || !jugadorNombre) {
-      alert("Debes ingresar Room ID y tu nombre");
-      return;
-    }
-    const salaRef = doc(db, "rooms", roomId);
-    const salaSnap = await getDoc(salaRef);
+// ======= API de sala =======
+async function crearSala({ jugadoresEsperados = 4, hostName }) {
+  const roomId = shortId();
+  const normalWord = randChoice(JUGADORES);
+  const hostId = localStorage.getItem("playerId") || crypto?.randomUUID?.() || shortId();
+  // Doc principal de la sala
+  await setDoc(doc(db, "rooms", roomId), {
+    status: "waiting", // waiting | playing | ended
+    jugadoresEsperados,
+    normalWord,
+    createdAt: serverTimestamp(),
+    hostId,
+    hostName: hostName || "Anfitrión",
+  });
+  // Anfitrión como primer jugador
+  await setDoc(doc(db, "rooms", roomId, "players", hostId), {
+    name: hostName || "Anfitrión",
+    joinedAt: serverTimestamp(),
+  });
+  return { roomId, hostId };
+}
 
-    if (!salaSnap.exists()) {
-      alert("La sala no existe.");
-      return;
-    }
+async function unirseSala({ roomId, name }) {
+  const playerId = localStorage.getItem("playerId") || crypto?.randomUUID?.() || shortId();
+  const salaRef = doc(db, "rooms", roomId);
+  const sala = await getDoc(salaRef);
+  if (!sala.exists()) throw new Error("La sala no existe.");
+  await setDoc(doc(db, "rooms", roomId, "players", playerId), {
+    name: name || "Jugador",
+    joinedAt: serverTimestamp(),
+  }, { merge: true });
+  return { playerId };
+}
 
-    await addDoc(collection(db, "rooms", roomId, "players"), {
-      nombre: jugadorNombre,
-      palabra: "",
-      voto: "",
-    });
-  };
+// Asigna la MISMA palabra normal de la sala a todos, y a 1 impostor "IMPOSTOR"
+async function iniciarPartida({ roomId }) {
+  const salaRef = doc(db, "rooms", roomId);
+  const salaSnap = await getDoc(salaRef);
+  if (!salaSnap.exists()) throw new Error("No existe la sala");
+  const sala = salaSnap.data();
+  if (sala.status === "playing") return; // ya empezó
 
-  // 🔹 Escuchar jugadores en tiempo real
+  // leer jugadores actuales
+  const playersSnap = await getDocs(collection(db, "rooms", roomId, "players"));
+  const players = [];
+  playersSnap.forEach((d) => players.push({ id: d.id, ...d.data() }));
+  if (players.length < 3) throw new Error("Se requieren al menos 3 jugadores para iniciar.");
+
+  // elegir impostor
+  const impostorIdx = Math.floor(Math.random() * players.length);
+  const impostorId = players[impostorIdx].id;
+  const normalWord = sala.normalWord || randChoice(JUGADORES);
+
+  // escribir palabras a cada jugador + actualizar sala
+  const batch = writeBatch(db);
+  players.forEach((p) => {
+    const pRef = doc(db, "rooms", roomId, "players", p.id);
+    const palabra = p.id === impostorId ? "IMPOSTOR" : normalWord;
+    batch.set(pRef, { palabra }, { merge: true });
+  });
+  batch.set(salaRef, { status: "playing", startedAt: serverTimestamp(), impostorId }, { merge: true });
+  await batch.commit();
+}
+
+function useSala(roomId) {
+  const [sala, setSala] = useState(null);
   useEffect(() => {
     if (!roomId) return;
-    const unsub = onSnapshot(
-      collection(db, "rooms", roomId, "players"),
-      (snapshot) => {
-        const lista = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
-        setJugadores(lista);
-      }
-    );
-    return () => unsub();
+    const unsub = onSnapshot(doc(db, "rooms", roomId), (snap) => {
+      setSala(snap.exists() ? { id: snap.id, ...snap.data() } : null);
+    });
+    return () => unsub && unsub();
   }, [roomId]);
+  return sala;
+}
 
-  // 🔹 Asignar roles cuando sala completa
-  const asignarRoles = async () => {
-    if (jugadores.length !== jugadoresEsperados) {
-      alert("Todavía no se conectaron todos los jugadores");
-      return;
-    }
-    const impostorIndex = Math.floor(Math.random() * jugadores.length);
-    const jugadorNormal = jugadoresFamosos[Math.floor(Math.random() * jugadoresFamosos.length)];
-
-    jugadores.forEach(async (j, idx) => {
-      await updateDoc(doc(db, "rooms", roomId, "players", j.id), {
-        palabra: idx === impostorIndex ? "IMPOSTOR" : jugadorNormal,
+function useJugadores(roomId) {
+  const [players, setPlayers] = useState([]);
+  useEffect(() => {
+    if (!roomId) return;
+    const unsub = onSnapshot(collection(db, "rooms", roomId, "players"), (snap) => {
+      const arr = [];
+      snap.forEach((d) => arr.push({ id: d.id, ...d.data() }));
+      // ordenar por joinedAt asc si existe
+      arr.sort((a, b) => {
+        const ta = a.joinedAt?.seconds || 0;
+        const tb = b.joinedAt?.seconds || 0;
+        return ta - tb;
       });
-      if (j.nombre === jugadorNombre) {
-        setMiPalabra(idx === impostorIndex ? "IMPOSTOR" : jugadorNormal);
-      }
+      setPlayers(arr);
     });
-  };
+    return () => unsub && unsub();
+  }, [roomId]);
+  return players;
+}
 
-  // 🔹 Votar
-  const votar = async (id) => {
-    await updateDoc(doc(db, "rooms", roomId, "players", jugadores.find(j => j.id === id).id), {
-      voto: id,
+function useMiJugador(roomId, playerId) {
+  const [me, setMe] = useState(null);
+  useEffect(() => {
+    if (!roomId || !playerId) return;
+    const unsub = onSnapshot(doc(db, "rooms", roomId, "players", playerId), (snap) => {
+      setMe(snap.exists() ? { id: snap.id, ...snap.data() } : null);
     });
-    setVoto(id);
-  };
+    return () => unsub && unsub();
+  }, [roomId, playerId]);
+  return me;
+}
+
+// ======= UI mínima para probar =======
+export default function App() {
+  const playerId = useLocalId();
+  const [roomId, setRoomId] = useState("");
+  const [name, setName] = useState("");
+  const [esperados, setEsperados] = useState(4);
+  const sala = useSala(roomId);
+  const jugadores = useJugadores(roomId);
+  const yo = useMiJugador(roomId, playerId);
+
+  const enLobby = !sala || sala?.status === "waiting";
+
+  const faltan = useMemo(() => {
+    if (!sala) return null;
+    const tot = jugadores.length;
+    return Math.max(0, (sala.jugadoresEsperados || 0) - tot);
+  }, [sala, jugadores.length]);
+
+  async function handleCrearSala() {
+    try {
+      const { roomId: rid } = await crearSala({ jugadoresEsperados: Number(esperados), hostName: name || "Anfitrión" });
+      setRoomId(rid);
+    } catch (e) {
+      alert(e.message);
+    }
+  }
+
+  async function handleUnirse() {
+    try {
+      await unirseSala({ roomId: roomId.trim(), name: name || "Jugador" });
+    } catch (e) {
+      alert(e.message);
+    }
+  }
+
+  async function handleIniciar() {
+    try {
+      await iniciarPartida({ roomId });
+    } catch (e) {
+      alert(e.message);
+    }
+  }
 
   return (
-    <div style={{ padding: 20 }}>
-      <h1>Juego del Impostor 412 ⚽</h1>
+    <div style={{ maxWidth: 720, margin: "0 auto", padding: 16, fontFamily: "system-ui, sans-serif" }}>
+      <h1>Impostor 412 — Demo fija</h1>
 
-      {!miPalabra && (
-        <div>
-          <input
-            placeholder="Room ID"
-            value={roomId}
-            onChange={(e) => setRoomId(e.target.value)}
-          />
-          <input
-            placeholder="Tu nombre"
-            value={jugadorNombre}
-            onChange={(e) => setJugadorNombre(e.target.value)}
-          />
-          <input
-            type="number"
-            placeholder="Jugadores esperados"
-            value={jugadoresEsperados}
-            onChange={(e) => setJugadoresEsperados(Number(e.target.value))}
-          />
-          <button onClick={crearSala}>Crear Sala</button>
-          <button onClick={unirseSala}>Unirse a Sala</button>
-        </div>
+      {/* CREAR / UNIRSE */}
+      {!roomId && (
+        <section style={{ display: "grid", gap: 16 }}>
+          <div style={{ display: "grid", gap: 8 }}>
+            <label>Tu nombre</label>
+            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Ej. Alex" />
+          </div>
+
+          <div style={{ border: "1px solid #ddd", padding: 12, borderRadius: 8 }}>
+            <h3>Crear sala</h3>
+            <label>Jugadores esperados</label>
+            <input type="number" min={3} value={esperados} onChange={(e) => setEsperados(e.target.value)} />
+            <button onClick={handleCrearSala} style={{ marginLeft: 12 }}>Crear</button>
+          </div>
+
+          <div style={{ border: "1px solid #ddd", padding: 12, borderRadius: 8 }}>
+            <h3>Unirse a una sala</h3>
+            <label>ID de sala</label>
+            <input value={roomId} onChange={(e) => setRoomId(e.target.value.toUpperCase())} placeholder="ABCDE" />
+            <button onClick={handleUnirse} style={{ marginLeft: 12 }}>Unirse</button>
+          </div>
+        </section>
       )}
 
-      {miPalabra && (
-        <div>
-          <h2>Tu palabra: {miPalabra}</h2>
-          {miPalabra !== "IMPOSTOR" ? (
-            <p>No reveles tu palabra 😉</p>
-          ) : (
-            <p>¡Eres el impostor! 🤫</p>
+      {/* SALA */}
+      {roomId && (
+        <section style={{ marginTop: 16 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <h2>Sala: {roomId}</h2>
+            <span>Estado: {sala?.status || "–"}</span>
+          </div>
+
+          <p>Esperados: {sala?.jugadoresEsperados ?? "–"} — Conectados: {jugadores.length}</p>
+          {enLobby && (
+            <p>Faltan: {faltan}</p>
           )}
-        </div>
-      )}
 
-      <h3>Jugadores en la sala</h3>
-      <ul>
-        {jugadores.map((j) => (
-          <li key={j.id}>
-            {j.nombre} {voto === j.id && "✅"}
-            <button onClick={() => votar(j.id)}>Votar</button>
-          </li>
-        ))}
-      </ul>
+          <div style={{ border: "1px solid #eee", padding: 12, borderRadius: 8, marginTop: 8 }}>
+            <h3>Jugadores</h3>
+            <ol>
+              {jugadores.map((j) => (
+                <li key={j.id}>
+                  {j.name || j.id}
+                  {sala?.impostorId && sala.impostorId === j.id ? " (impostor)" : ""}
+                </li>
+              ))}
+            </ol>
+          </div>
 
-      {jugadores.length === jugadoresEsperados && (
-        <button onClick={asignarRoles}>Iniciar Juego</button>
+          {enLobby && (
+            <button onClick={handleIniciar} disabled={jugadores.length < 3} style={{ marginTop: 12 }}>
+              Iniciar partida
+            </button>
+          )}
+
+          {/* Tarjeta privada del jugador */}
+          {yo?.palabra && (
+            <div style={{ marginTop: 16, padding: 12, border: "2px dashed #999", borderRadius: 8 }}>
+              <strong>Tu palabra secreta:</strong>
+              <div style={{ fontSize: 24, marginTop: 8 }}>{yo.palabra}</div>
+            </div>
+          )}
+
+          {/* Si ya empezó pero aún no tienes palabra, muéstralo */}
+          {sala?.status === "playing" && !yo?.palabra && (
+            <p style={{ marginTop: 8 }}>Asignando palabras…</p>
+          )}
+        </section>
       )}
     </div>
   );
 }
-
-export default App;
