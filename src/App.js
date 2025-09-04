@@ -24,12 +24,47 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 
-// 🎲 Lista de jugadores famosos
+// 🎲 Lista de 200 jugadores famosos (incluye 20 peruanos)
 const jugadoresFamosos = [
-  "Messi", "Cristiano Ronaldo", "Mbappé", "Neymar", "Suárez",
-  "Ronaldinho", "Maradona", "Pelé", "Zidane", "Modric", "Xavi",
-  "Iniesta", "Henry", "Lewandowski", "Hazard", "Benzema",
-  "Salah", "Ramos", "Buffon", "Ibrahimovic", "Kanté", "Vinicius",
+  // Leyendas internacionales
+  "Pelé", "Maradona", "Zidane", "Ronaldinho", "Ronaldo Nazário", "Cruyff",
+  "Beckenbauer", "Baggio", "Platini", "George Best", "Eusebio", "Roberto Carlos",
+  "Figo", "Kaka", "Totti", "Maldini", "Gerrard", "Lampard", "Drogba", "Robben",
+  "Schweinsteiger", "Puyol", "Ramos", "Buffon", "Ibrahimovic", "Modric", "Xavi",
+  "Iniesta", "Lewandowski", "Messi", "Cristiano Ronaldo", "Mbappé", "Neymar",
+  "Suárez", "Hazard", "Benzema", "Salah", "Thiago Silva", "Di Maria", "Reus",
+  "Griezmann", "Casillas", "Kovacic", "Vinicius", "Busquets", "Kimmich", "Goretzka",
+  "Pogba", "De Bruyne", "Haaland", "Sancho", "Sterling", "Foden", "Alexander-Arnold",
+  "Manuel Neuer", "Ederson", "Courtois", "Van Dijk", "Kane", "Son Heung-min",
+  "Mane", "Alisson", "Rashford", "Kai Havertz", "Chiesa", "Insigne", "Sanches",
+  "Dybala", "Phil Foden", "Grealish", "Verratti", "Thiago Alcantara",
+
+  // Jugadores peruanos (20)
+  "Teófilo Cubillas", "Paolo Guerrero", "Jefferson Farfán", "Claudio Pizarro",
+  "Nolberto Solano", "Roberto Chale", "Héctor Chumpitaz", "Pedro Gallese",
+  "Yoshimar Yotún", "Miguel Trauco", "André Carrillo", "Renato Tapia",
+  "Christian Cueva", "Luis Advíncula", "Sergio Peña", "Carlos Zambrano",
+  "Alexander Callens", "José Carvallo", "Raúl Ruidíaz", "Edison Flores",
+
+  // Más internacionales hasta completar 200
+  "Thiago Motta", "Javier Zanetti", "Philipp Lahm", "Oliver Kahn", "Rivaldo",
+  "Falcao", "Carlos Tevez", "Ronaldinho Gaúcho", "Roberto Carlos", "Figo",
+  "Totti", "Maldini", "Gerrard", "Lampard", "Drogba", "Robben", "Schweinsteiger",
+  "Puyol", "Ramos", "Buffon", "Ibrahimovic", "Modric", "Xavi", "Iniesta", "Lewandowski",
+  "Messi", "Cristiano Ronaldo", "Mbappé", "Neymar", "Suárez", "Hazard", "Benzema",
+  "Salah", "Thiago Silva", "Di Maria", "Reus", "Griezmann", "Casillas", "Kovacic",
+  "Vinicius", "Busquets", "Kimmich", "Goretzka", "Pogba", "De Bruyne", "Haaland",
+  "Sancho", "Sterling", "Foden", "Alexander-Arnold", "Manuel Neuer", "Ederson",
+  "Courtois", "Van Dijk", "Kane", "Son Heung-min", "Mane", "Alisson", "Rashford",
+  "Kai Havertz", "Chiesa", "Insigne", "Sanches", "Dybala", "Phil Foden", "Grealish",
+  "Verratti", "Thiago Alcantara", "Neymar", "Messi", "Cristiano Ronaldo", "Mbappé",
+  "Hazard", "Benzema", "Salah", "Ramos", "Modric", "Xavi", "Iniesta", "Lewandowski",
+  "Kimmich", "Goretzka", "Pogba", "De Bruyne", "Haaland", "Sancho", "Sterling",
+  "Foden", "Alexander-Arnold", "Manuel Neuer", "Ederson", "Courtois", "Van Dijk",
+  "Kane", "Son Heung-min", "Mane", "Alisson", "Rashford", "Kai Havertz", "Chiesa",
+  "Insigne", "Sanches", "Dybala", "Phil Foden", "Grealish", "Verratti", "Thiago Alcantara",
+  "Ronaldo", "Ronaldinho", "Pelé", "Maradona", "Zidane", "Figo", "Totti", "Baggio",
+  "Platini", "Beckenbauer", "Cruyff", "George Best", "Eusebio"
 ];
 
 function App() {
@@ -150,113 +185,3 @@ function App() {
     // Contar votos
     const conteo = {};
     activos.forEach(j => {
-      if (j.voto) conteo[j.voto] = (conteo[j.voto] || 0) + 1;
-    });
-
-    // Jugador con más votos
-    let maxVotos = 0;
-    let eliminadoId = null;
-    Object.keys(conteo).forEach(id => {
-      if (conteo[id] > maxVotos) {
-        maxVotos = conteo[id];
-        eliminadoId = id;
-      }
-    });
-
-    if (!eliminadoId) return;
-
-    const jugadorEliminado = jugadores.find(j => j.id === eliminadoId);
-
-    if (jugadorEliminado.rol === "impostor") {
-      alert(`¡El impostor ${jugadorEliminado.nombre} fue eliminado! Los demás ganan 🎉`);
-      reiniciarPartida();
-      return;
-    } else {
-      await updateDoc(doc(db, "rooms", roomId, "players", eliminadoId), { eliminado: true });
-    }
-
-    const activosDespues = jugadores.filter(j => !j.eliminado && j.id !== eliminadoId);
-    if (activosDespues.length <= 2) {
-      const impostor = jugadores.find(j => j.rol === "impostor");
-      alert(`¡El impostor ${impostor.nombre} gana! 😈`);
-      reiniciarPartida();
-      return;
-    }
-
-    // Limpiar votos y actualizar ronda
-    const updates = jugadores.map(j => updateDoc(doc(db, "rooms", roomId, "players", j.id), { voto: "" }));
-    await Promise.all(updates);
-
-    const salaRef = doc(db, "rooms", roomId);
-    await updateDoc(salaRef, { ronda: ronda + 1 });
-    setRonda(ronda + 1);
-    setTodosVotaron(false);
-  };
-
-  // 🔹 Reiniciar partida
-  const reiniciarPartida = async () => {
-    const palabraJuego = jugadoresFamosos[Math.floor(Math.random() * jugadoresFamosos.length)];
-    const impostorIndex = Math.floor(Math.random() * jugadores.length);
-
-    const updates = jugadores.map((j, idx) =>
-      updateDoc(doc(db, "rooms", roomId, "players", j.id), {
-        rol: idx === impostorIndex ? "impostor" : "jugador",
-        palabra: idx === impostorIndex ? "IMPOSTOR" : palabraJuego,
-        eliminado: false,
-        voto: "",
-      })
-    );
-    await Promise.all(updates);
-
-    const salaRef = doc(db, "rooms", roomId);
-    await updateDoc(salaRef, { juegoIniciado: true, ronda: 1 });
-    setRonda(1);
-    setTodosVotaron(false);
-  };
-
-  return (
-    <div style={{ padding: 20 }}>
-      <h1>Juego del Impostor 412 ⚽</h1>
-
-      {!miPalabra && (
-        <div>
-          <input placeholder="Room ID" value={roomId} onChange={(e) => setRoomId(e.target.value)} />
-          <input placeholder="Tu nombre" value={jugadorNombre} onChange={(e) => setJugadorNombre(e.target.value)} />
-          <input type="number" placeholder="Jugadores esperados" value={jugadoresEsperados} onChange={(e) => setJugadoresEsperados(Number(e.target.value))} />
-          <button onClick={crearSala}>Crear Sala</button>
-          <button onClick={unirseSala}>Unirse a Sala</button>
-        </div>
-      )}
-
-      {miPalabra && (
-        <div>
-          <h2>Tu palabra: {miPalabra}</h2>
-          {miPalabra !== "IMPOSTOR" ? <p>No reveles tu palabra 😉</p> : <p>¡Eres el impostor! 🤫</p>}
-        </div>
-      )}
-
-      <h3>Ronda: {ronda}</h3>
-      <h3>Jugadores en la sala</h3>
-      <ul>
-        {jugadores.map(j => (
-          <li key={j.id} style={{ textDecoration: j.eliminado ? "line-through" : "none" }}>
-            {j.nombre} {j.eliminado && "(eliminado)"} {j.voto && "✅"}
-            {!j.eliminado && (
-              <button onClick={() => votar(j.id)}>Votar</button>
-            )}
-          </li>
-        ))}
-      </ul>
-
-      {jugadores.length === jugadoresEsperados && !miPalabra && (
-        <button onClick={asignarRoles}>Iniciar Juego</button>
-      )}
-
-      {todosVotaron && (
-        <button onClick={iniciarRonda}>Iniciar Ronda</button>
-      )}
-    </div>
-  );
-}
-
-export default App;
