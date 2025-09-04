@@ -9,8 +9,6 @@ import {
   collection,
   addDoc,
   updateDoc,
-  query,
-  where,
 } from "firebase/firestore";
 
 // ⚡ Configuración Firebase
@@ -26,7 +24,7 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 
-// 🎲 Lista de jugadores conocidos
+// 🎲 Lista de jugadores famosos
 const jugadoresFamosos = [
   "Messi", "Cristiano Ronaldo", "Mbappé", "Neymar", "Suárez",
   "Ronaldinho", "Maradona", "Pelé", "Zidane", "Modric", "Xavi",
@@ -41,7 +39,7 @@ function App() {
   const [miPalabra, setMiPalabra] = useState("");
   const [jugadores, setJugadores] = useState([]);
   const [ronda, setRonda] = useState(1);
-  const [juegoTerminado, setJuegoTerminado] = useState(false);
+  const [todosVotaron, setTodosVotaron] = useState(false);
 
   // 🔹 Crear sala
   const crearSala = async () => {
@@ -98,117 +96,104 @@ function App() {
     return () => unsub();
   }, [roomId, jugadorNombre]);
 
-  // 🔹 Asignar roles y palabras
+  // 🔹 Detectar si todos votaron
+  useEffect(() => {
+    const activos = jugadores.filter(j => !j.eliminado);
+    if (activos.length === 0) return;
+
+    const completaronVoto = activos.every(j => j.voto && !j.eliminado);
+    setTodosVotaron(completaronVoto);
+  }, [jugadores]);
+
+  // 🔹 Asignar roles y palabra
   const asignarRoles = async () => {
-    const jugadoresActivos = jugadores.filter(j => !j.eliminado);
-    if (jugadoresActivos.length !== jugadoresEsperados) {
+    const activos = jugadores.filter(j => !j.eliminado);
+    if (activos.length !== jugadoresEsperados) {
       alert("Todavía no se conectaron todos los jugadores");
       return;
     }
 
-    const impostorIndex = Math.floor(Math.random() * jugadoresActivos.length);
+    const impostorIndex = Math.floor(Math.random() * activos.length);
     const palabraJuego = jugadoresFamosos[Math.floor(Math.random() * jugadoresFamosos.length)];
 
     const salaRef = doc(db, "rooms", roomId);
-
     await setDoc(salaRef, {
       palabraJuego,
-      impostorId: jugadoresActivos[impostorIndex].id,
+      impostorId: activos[impostorIndex].id,
       juegoIniciado: true,
       ronda: 1,
     }, { merge: true });
 
-    const updates = jugadoresActivos.map((j, idx) =>
+    const updates = activos.map((j, idx) =>
       updateDoc(doc(db, "rooms", roomId, "players", j.id), {
         rol: idx === impostorIndex ? "impostor" : "jugador",
         palabra: idx === impostorIndex ? "IMPOSTOR" : palabraJuego,
         voto: "",
+        eliminado: false,
       })
     );
     await Promise.all(updates);
   };
 
-  // 🔹 Votar
+  // 🔹 Votar (modificable hasta iniciar ronda)
   const votar = async (id) => {
-    // Verificar si jugador ya votó
     const miInfo = jugadores.find(j => j.nombre === jugadorNombre);
-    if (!miInfo || miInfo.voto) {
-      alert("Ya votaste en esta ronda");
-      return;
-    }
+    if (!miInfo || miInfo.eliminado) return;
 
-    await updateDoc(doc(db, "rooms", roomId, "players", miInfo.id), {
-      voto: id,
-    });
-    setMiPalabra(miInfo.palabra);
-
-    // Revisar si todos los jugadores activos ya votaron
-    const jugadoresActivos = jugadores.filter(j => !j.eliminado);
-    const votosHechos = jugadoresActivos.filter(j => j.voto && !j.eliminado);
-    if (votosHechos.length === jugadoresActivos.length) {
-      terminarRonda();
-    }
+    await updateDoc(doc(db, "rooms", roomId, "players", miInfo.id), { voto: id });
   };
 
-  // 🔹 Terminar ronda
-  const terminarRonda = async () => {
-    const jugadoresActivos = jugadores.filter(j => !j.eliminado);
+  // 🔹 Iniciar ronda (procesar votos)
+  const iniciarRonda = async () => {
+    const activos = jugadores.filter(j => !j.eliminado);
 
     // Contar votos
-    const conteoVotos = {};
-    jugadoresActivos.forEach(j => {
-      if (j.voto) {
-        conteoVotos[j.voto] = (conteoVotos[j.voto] || 0) + 1;
-      }
+    const conteo = {};
+    activos.forEach(j => {
+      if (j.voto) conteo[j.voto] = (conteo[j.voto] || 0) + 1;
     });
 
-    // Encontrar jugador con más votos
+    // Jugador con más votos
     let maxVotos = 0;
-    let jugadorEliminadoId = null;
-    Object.keys(conteoVotos).forEach(id => {
-      if (conteoVotos[id] > maxVotos) {
-        maxVotos = conteoVotos[id];
-        jugadorEliminadoId = id;
+    let eliminadoId = null;
+    Object.keys(conteo).forEach(id => {
+      if (conteo[id] > maxVotos) {
+        maxVotos = conteo[id];
+        eliminadoId = id;
       }
     });
 
-    if (!jugadorEliminadoId) return;
+    if (!eliminadoId) return;
 
-    const jugadorEliminado = jugadores.find(j => j.id === jugadorEliminadoId);
+    const jugadorEliminado = jugadores.find(j => j.id === eliminadoId);
 
     if (jugadorEliminado.rol === "impostor") {
-      alert("¡El impostor fue eliminado! Los demás ganan 🎉");
-      setJuegoTerminado(true);
+      alert(`¡El impostor ${jugadorEliminado.nombre} fue eliminado! Los demás ganan 🎉`);
       reiniciarPartida();
       return;
     } else {
-      await updateDoc(doc(db, "rooms", roomId, "players", jugadorEliminadoId), {
-        eliminado: true,
-      });
+      await updateDoc(doc(db, "rooms", roomId, "players", eliminadoId), { eliminado: true });
     }
 
-    // Revisar si quedan solo 2 jugadores → impostor gana
-    const activosDespues = jugadores.filter(j => !j.eliminado && j.id !== jugadorEliminadoId);
+    const activosDespues = jugadores.filter(j => !j.eliminado && j.id !== eliminadoId);
     if (activosDespues.length <= 2) {
       const impostor = jugadores.find(j => j.rol === "impostor");
       alert(`¡El impostor ${impostor.nombre} gana! 😈`);
-      setJuegoTerminado(true);
       reiniciarPartida();
       return;
     }
 
-    // Limpiar votos y aumentar ronda
-    const updates = jugadores.map(j =>
-      updateDoc(doc(db, "rooms", roomId, "players", j.id), { voto: "" })
-    );
+    // Limpiar votos y actualizar ronda
+    const updates = jugadores.map(j => updateDoc(doc(db, "rooms", roomId, "players", j.id), { voto: "" }));
     await Promise.all(updates);
 
     const salaRef = doc(db, "rooms", roomId);
-    await updateDoc(salaRef, { ronda: (ronda + 1) });
+    await updateDoc(salaRef, { ronda: ronda + 1 });
     setRonda(ronda + 1);
+    setTodosVotaron(false);
   };
 
-  // 🔹 Reiniciar partida con nueva palabra
+  // 🔹 Reiniciar partida
   const reiniciarPartida = async () => {
     const palabraJuego = jugadoresFamosos[Math.floor(Math.random() * jugadoresFamosos.length)];
     const impostorIndex = Math.floor(Math.random() * jugadores.length);
@@ -225,8 +210,8 @@ function App() {
 
     const salaRef = doc(db, "rooms", roomId);
     await updateDoc(salaRef, { juegoIniciado: true, ronda: 1 });
-    setJuegoTerminado(false);
     setRonda(1);
+    setTodosVotaron(false);
   };
 
   return (
@@ -235,22 +220,9 @@ function App() {
 
       {!miPalabra && (
         <div>
-          <input
-            placeholder="Room ID"
-            value={roomId}
-            onChange={(e) => setRoomId(e.target.value)}
-          />
-          <input
-            placeholder="Tu nombre"
-            value={jugadorNombre}
-            onChange={(e) => setJugadorNombre(e.target.value)}
-          />
-          <input
-            type="number"
-            placeholder="Jugadores esperados"
-            value={jugadoresEsperados}
-            onChange={(e) => setJugadoresEsperados(Number(e.target.value))}
-          />
+          <input placeholder="Room ID" value={roomId} onChange={(e) => setRoomId(e.target.value)} />
+          <input placeholder="Tu nombre" value={jugadorNombre} onChange={(e) => setJugadorNombre(e.target.value)} />
+          <input type="number" placeholder="Jugadores esperados" value={jugadoresEsperados} onChange={(e) => setJugadoresEsperados(Number(e.target.value))} />
           <button onClick={crearSala}>Crear Sala</button>
           <button onClick={unirseSala}>Unirse a Sala</button>
         </div>
@@ -259,22 +231,17 @@ function App() {
       {miPalabra && (
         <div>
           <h2>Tu palabra: {miPalabra}</h2>
-          {miPalabra !== "IMPOSTOR" ? (
-            <p>No reveles tu palabra 😉</p>
-          ) : (
-            <p>¡Eres el impostor! 🤫</p>
-          )}
+          {miPalabra !== "IMPOSTOR" ? <p>No reveles tu palabra 😉</p> : <p>¡Eres el impostor! 🤫</p>}
         </div>
       )}
 
       <h3>Ronda: {ronda}</h3>
-
       <h3>Jugadores en la sala</h3>
       <ul>
-        {jugadores.map((j) => (
+        {jugadores.map(j => (
           <li key={j.id} style={{ textDecoration: j.eliminado ? "line-through" : "none" }}>
             {j.nombre} {j.eliminado && "(eliminado)"} {j.voto && "✅"}
-            {!j.eliminado && !juegoTerminado && (
+            {!j.eliminado && (
               <button onClick={() => votar(j.id)}>Votar</button>
             )}
           </li>
@@ -283,6 +250,10 @@ function App() {
 
       {jugadores.length === jugadoresEsperados && !miPalabra && (
         <button onClick={asignarRoles}>Iniciar Juego</button>
+      )}
+
+      {todosVotaron && (
+        <button onClick={iniciarRonda}>Iniciar Ronda</button>
       )}
     </div>
   );
